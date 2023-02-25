@@ -7,7 +7,13 @@
     "candy_utils_0_2_1",
     "principalmo",
     "crypto",
-    "hash"
+    "hash",
+    "axon",
+    "StableBuffer",
+    "map",
+    "stablebuffer_0_2_0",
+    "icrc1",
+    "itertools", "array", "httpparser",  "StableTrieMap", "json", "principal","yc","ogy_nft"
   ],
   compiler = Some "0.8.1",
 }

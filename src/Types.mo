@@ -6,7 +6,7 @@ module{
 public type Options = {
   axonCanister: Principal;
   axonId : Nat;
-  voiceWallet: Principal;
+  voiceTarget: Principal;
   icp_fee: ?Nat64;
 };
 
@@ -48,7 +48,10 @@ public type AxonCommandExecution = {
     #system_fatal;
   };
 
-public type BatchOp = {#Mint:{owner : ?Principal; amount :Nat};#Burn:{owner: Principal; amount : ?Nat};};
+public type BatchOp = {
+  #Mint:{owner : ?Principal; amount :Nat};
+  #Burn:{owner: Principal; amount : ?Nat};
+  #Balance:{owner: Principal; amount : Nat};};
 
 public type DelegationInfo = {
     delegationAccount :  ?{ 

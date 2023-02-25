@@ -24,13 +24,20 @@ module {
     let axon : Types.AxonService = actor(Principal.toText(options.axonCanister));
     let icp_fee : Nat64 = Option.get(options.icp_fee, 10000 : Nat64);
     let axonId = options.axonId;
-    let voiceWallet : ICRCTypes.Self = actor(Principal.toText(options.voiceWallet));
+    let voiceTarget : ICRCTypes.Self = actor(Principal.toText(options.voiceTarget));
     let icpWallet : ICRCTypes.Self = actor("ryjl3-tyaaa-aaaaa-aaaba-cai");
     let donationWallet : Text = "d006f15acf418a039559d0bef90367a8302524c1511b3307f2f4e3c1020903e8";
     
 
     public func process(buffer: Buffer.Buffer<Types.BatchOp>) : async* Result.Result<Types.AxonCommandExecution, Types.AxonError> {
-      let results = await axon.mint_burn_batch(axonId, buffer.toArray());
+      D.print("voice - process called " # debug_show(Principal.fromActor(axon)));
+      let results =  try{
+        await axon.mint_burn_batch(axonId, buffer.toArray());
+      } catch (e){
+        D.print("voice - mint_burn_batch failed " # Error.message(e));
+        return #err(#Error({error_message = Error.message(e); error_type =#canister_error }));
+      };
+
       return results;
     };
 
@@ -43,11 +50,16 @@ module {
 
       var totalSeed = 0;
 
-      totalSeed += await voiceWallet.icrc1_balance_of({owner = owner; subaccount = null});
+      totalSeed += await voiceTarget.icrc1_balance_of({owner = owner; subaccount = null});
 
+      D.print("null sub account was " # debug_show(totalSeed));
+
+      D.print("doing subaccounts " # debug_show(subaccounts.size()));
       //todo: refactor to batch when available
-      for(thisItem in subaccounts.vals()){
-        results.add(voiceWallet.icrc1_balance_of({owner = owner; subaccount = ?thisItem}));
+      label process for(thisItem in subaccounts.vals()){
+        D.print("this subaccounts " # debug_show(thisItem));
+        if(thisItem.size() == 0) {continue process};
+        results.add(voiceTarget.icrc1_balance_of({owner = owner; subaccount = ?thisItem}));
         if(results.size() == 9){
           for(thisItem in results.vals()){
             totalSeed += await thisItem
@@ -60,9 +72,13 @@ module {
         totalSeed += await thisItem
       };
 
-      if(balance == 0){
+      D.print("after sub accounts. now " # debug_show(totalSeed));
+
+      if(totalSeed == 0){
+        D.print("totalseed 0 " # debug_show(totalSeed));
         return await axon.mint_burn_batch(axonId, [#Burn({owner = owner; amount = null;})]);
       } else {
+        D.print("totalseed not 0 " # debug_show(totalSeed));
         return await axon.mint_burn_batch(axonId, [#Burn({owner = owner; amount = null;}), #Mint({owner=?owner; amount = totalSeed})]);
       };
     };
@@ -113,6 +129,10 @@ module {
 
     public func transfer(from_owner: Principal, to_owner:Principal, amount: Nat) : async* Result.Result<Types.AxonCommandExecution, Types.AxonError>{
       await axon.mint_burn_batch(axonId, [#Burn({owner=from_owner; amount = ?amount}),#Mint({owner = ?to_owner; amount = amount})]);
+    };
+
+    public func updateBalance(owner: Principal, amount: Nat) : async* Result.Result<Types.AxonCommandExecution, Types.AxonError>{
+      await axon.mint_burn_batch(axonId, [#Balance({owner=owner; amount = amount})]);
     };
 
     public func get_delegation_info(caller: ?Principal, follower: ICRCTypes.Account, canister: Principal, fee: Nat) : Types.DelegationInfo{

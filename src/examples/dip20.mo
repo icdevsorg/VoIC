@@ -7,12 +7,15 @@ import VoICTypes "../Types";
 
 import Blob "mo:base/Blob";
 import Buffer "mo:base/Buffer";
+import Debug "mo:base/Debug";
+import Error "mo:base/Error";
 import IC "mo:base/ExperimentalInternetComputer";
 import Iter "mo:base/Iter";
 import Option "mo:base/Option";
 import Principal "mo:base/Principal";
 import Result "mo:base/Result";
 import Timer "mo:base/Timer";
+import Time "mo:base/Time";
 
 
 import ExperimentalCycles "mo:base/ExperimentalCycles";
@@ -26,7 +29,7 @@ shared (deployer) actor class dip20_voice() = this {
   stable var admin = deployer.caller;
   stable var token_address : Principal = Principal.fromText("5gxp5-jyaaa-aaaag-qarma-cai");
   stable var voice_address : Principal = Principal.fromText("zfcdd-tqaaa-aaaaq-aaaga-cai");
-  stable var axon_caniser : Principal = Principal.fromText("vq3jg-tiaaa-aaaao-ag2uq-cai");
+  stable var axon_canister : Principal = Principal.fromText("vq3jg-tiaaa-aaaao-ag2uq-cai");
   stable var secondsPerRound : Nat = 20;
   stable var axonId = 0;
   stable var force_sync = Set.new<Principal>();
@@ -38,25 +41,44 @@ shared (deployer) actor class dip20_voice() = this {
   stable var maxAirbrake = 100;
   stable var delegation_fee = 1000000;
   stable var account_position = 0;
+  stable var log = Map.new<Int, Text>();
+  stable var currentSyncTimer = 0;
 
-  let voic = VoIC.VoIC({
+  var voic = VoIC.VoIC({
     axonId = axonId;
-    axonCanister = axon_caniser;
-    voiceWallet = voice_address;
+    axonCanister = axon_canister;
+    voiceTarget = token_address;
     icp_fee = ?10000 : ?Nat64;
   });
 
   let nanosecond : Nat64 = 10 ** 9;
 
+  private func addLog(item : Text){
+    ignore Map.put(log, Map.ihash, Time.now() + Map.size(log), item);
+    Debug.print(item);
+    clearLog();
+  };
+
+  private func clearLog(){
+    if(Map.size(log) > 2000){
+      var tracker = 0;
+      label clear for(thisItem in Map.entries(log)){
+        Map.delete(log, Map.ihash, thisItem.0);
+        tracker +=1;
+        if(tracker > 1000){break clear};
+      };
+    };
+  };
+
   private func processHolders(items: [(Principal, Nat)], buffer: Buffer.Buffer<VoICTypes.BatchOp>) : () {
+    addLog("processingHolders " # debug_show(items.size()));
     for(thisItem in items.vals()){
-      buffer.add(#Burn({owner = thisItem.0; amount = null})); //burn it all
-      buffer.add(#Mint({owner = ?thisItem.0; amount = thisItem.1}));// mint new balance
+      buffer.add(#Balance({owner = thisItem.0; amount = thisItem.1}));// mint new balance
     };
   };
 
   private func updateSecondsPerRound(newVal : Nat) : (){
-    secondsPerRound := secondsPerRound / 2;
+    secondsPerRound := newVal;
     if(secondsPerRound < minSecondsPerRound){
       secondsPerRound := minSecondsPerRound;
     };
@@ -71,18 +93,21 @@ shared (deployer) actor class dip20_voice() = this {
     let buffer = Buffer.Buffer<VoICTypes.BatchOp>(1);
 
     
-
+    addLog("in sync accounts");
     let holders = try{
       await service.getHolders(account_position, accounts_at_a_time);
     } catch (e){
+      addLog("error in getholder" # Error.message(e));
       //todo airbrake
       if(airbrake < 100){
         airbrake += 1;
         updateSecondsPerRound(secondsPerRound * 2);
-        let escape_timer = Timer.setTimer(#seconds(secondsPerRound), _sync_accounts);
+        currentSyncTimer := Timer.setTimer(#seconds(secondsPerRound), _sync_accounts);
       };
       return;
     };
+
+    addLog("holders"  # debug_show(holders.size()));
 
     if(holders.size() > 0){
       //we need to handle some archived transactions and likely shorten our time to wait.
@@ -97,16 +122,12 @@ shared (deployer) actor class dip20_voice() = this {
         secondsPerRound;
       };
 
-    
-
-    
-
       let result = await* voic.process(buffer);
 
       //if any errors, just wait until next time and it should be fixed? I guess we can do sync accounts as well;
       switch(result){
         case(#err(err)){
-          //unfortunately it could have been any of these that failed.
+          //unfortunately it could have been any of these that faileDebug.
           for(thisItem in buffer.vals()){
             switch(thisItem){
               case(#Mint(data)){
@@ -118,6 +139,9 @@ shared (deployer) actor class dip20_voice() = this {
               case(#Burn(data)){
                 Set.add<Principal>(force_sync, Set.phash, data.owner);
               };
+              case(#Balance(data)){
+                Set.add<Principal>(force_sync, Set.phash, data.owner);
+              };
             };
           };
         };
@@ -125,28 +149,35 @@ shared (deployer) actor class dip20_voice() = this {
         //lets inspect this and kick this off manually if necessary
         //let force_timer = Timer.setTimer(#seconds(secondsPerRound), _force_accounts);
       };
-      let refresh_timer = Timer.setTimer(#seconds(next_round), _sync_accounts);
+      currentSyncTimer := Timer.setTimer(#seconds(next_round), _sync_accounts);
 
     } else {
       //no accounts yet
-      let refresh_timer = Timer.setTimer(#seconds(secondsPerRound), _sync_accounts);
+      currentSyncTimer := Timer.setTimer(#seconds(secondsPerRound), _sync_accounts);
     };
   };
+
+ 
 
   private func _force_accounts() : async (){
     let failedSeeds = Buffer.Buffer<Principal>(1);
 
     let service : DIP20Types.Self = actor(Principal.toText(token_address));
 
+    addLog("in force accounts" # debug_show(Set.size(force_sync)));
+
 
     for(thisItem in Set.keys(force_sync)){
+      addLog("getting balance for" # debug_show(thisItem));
       let result = await* voic.dip20_seed(thisItem, await service.balanceOf(thisItem));
+      addLog("result from force account " # debug_show(result));
       switch(result){
         case(#ok(val)){
           Set.delete(force_sync, Set.phash, thisItem);
         };
         case(#err(err)){
           //todo log the error somewhere retrievalble
+          addLog("force account error" # debug_show(err));
           if(airbrake < 100){
             airbrake += 1;
             let force_timer = Timer.setTimer(#seconds(secondsPerRound), _force_accounts);
@@ -160,8 +191,9 @@ shared (deployer) actor class dip20_voice() = this {
 
  
 
-  public shared(msg) func start_sync() : async Bool{
-   ignore _sync_accounts();
+   public shared(msg) func start_sync() : async Bool{
+    Timer.cancelTimer(currentSyncTimer);
+    ignore _sync_accounts();
     return true;
   };
 
@@ -173,7 +205,7 @@ shared (deployer) actor class dip20_voice() = this {
   };
 
   public shared(msg) func add_force_accounts(request : [Principal]) : async Bool{
-  
+    addLog("adding principal to force account" # debug_show(request));
     for(principal in request.vals()){
       assert(msg.caller == principal or msg.caller == admin); //only an owner or admin can add their subaccount
       Set.add(force_sync, Set.phash, principal);
@@ -184,6 +216,7 @@ shared (deployer) actor class dip20_voice() = this {
 
   public shared(msg) func reset_airbrake() : async Bool{
     //get the transactions since the last block;
+     addLog("reset airbrake");
     airbrake := 0;
     return true;
   };
@@ -197,6 +230,12 @@ shared (deployer) actor class dip20_voice() = this {
   public shared(msg) func set_token_address(account: Principal) : async Bool{
     assert(msg.caller == admin);
     token_address:= account;
+    voic := VoIC.VoIC({
+      axonId = axonId;
+      axonCanister = axon_canister;
+      voiceTarget = token_address;
+      icp_fee = ?10000 : ?Nat64;
+    });
     return true;
   };
 
@@ -206,15 +245,27 @@ shared (deployer) actor class dip20_voice() = this {
     return true;
   };
 
-  public shared(msg) func set_axon_canisers(account: Principal) : async Bool{
+  public shared(msg) func set_axon_canister(account: Principal) : async Bool{
     assert(msg.caller == admin);
-    axon_caniser:= account;
+    axon_canister:= account;
+    voic := VoIC.VoIC({
+      axonId = axonId;
+      axonCanister = axon_canister;
+      voiceTarget = token_address;
+      icp_fee = ?10000 : ?Nat64;
+    });
     return true;
   };
 
   public shared(msg) func set_axon_id(id: Nat) : async Bool{
     assert(msg.caller == admin);
     axonId:= id;
+    voic := VoIC.VoIC({
+      axonId = axonId;
+      axonCanister = axon_canister;
+      voiceTarget = token_address;
+      icp_fee = ?10000 : ?Nat64;
+    });
     return true;
   };
 
@@ -248,13 +299,17 @@ shared (deployer) actor class dip20_voice() = this {
     return true;
   };
 
+  public query func get_log() : async [(Int, Text)]{
+    Iter.toArray(Map.entries(log));
+  };
+
 
   public query func get_metrics() : async {
     account_position : Nat;
     admin : Principal;
     token_address : Principal;
     voice_address : Principal;
-    axon_caniser : Principal;
+    axon_canister : Principal;
     secondsPerRound : Nat;
     standardSecondsPerround : Nat;
     axonId : Nat;
@@ -270,7 +325,7 @@ shared (deployer) actor class dip20_voice() = this {
       admin = admin; 
       token_address = token_address; 
       voice_address = voice_address; 
-      axon_caniser = axon_caniser; 
+      axon_canister = axon_canister; 
       secondsPerRound = secondsPerRound; 
       standardSecondsPerround = standardSecondsPerRound;
       axonId = axonId; 
@@ -296,6 +351,8 @@ shared (deployer) actor class dip20_voice() = this {
   };
 
   public shared(msg) func process_delegation(followee: ?Principal, follower: ICRCTypes.Account, block : Nat64) : async Result.Result<Bool, Text>{
+
+    addLog("Processesing Delegation " # debug_show(followee, follower, block));
     if(followee != ?msg.caller and followee != null){
       return(#err("unauthorized"));
     };
