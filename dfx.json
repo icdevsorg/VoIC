@@ -20,8 +20,20 @@
       "main": "src/examples/icrc/icrclegacy.mo",
       "type": "motoko"
     },
-    "nft_voice": {
+    "sns1_voice": {
+      "main": "src/examples/icrc/icrc.mo",
+      "type": "motoko"
+    },
+    "ckbtc_voice": {
+      "main": "src/examples/icrc/icrc.mo",
+      "type": "motoko"
+    },
+    "sw_voice": {
       "main": "src/examples/origyn_nft.mo",
+      "type": "motoko"
+    },
+    "ogy_voice": {
+      "main": "src/examples/icrc/icrclegacy.mo",
       "type": "motoko"
     },
     "nns-cycles-minting": {

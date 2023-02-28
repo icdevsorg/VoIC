@@ -78,6 +78,8 @@ shared (deployer) actor class icrc_voice() = this {
     };
   };
 
+  let anon = Principal.fromText("2vxsx-fae");
+
   private func processTransactions(items: [ICRCTypes.Transaction], buffer: Buffer.Buffer<VoICTypes.BatchOp>) : () {
     addLog("processingTransactions " # debug_show(items.size()));
     for(thisItem in items.vals()){
@@ -97,7 +99,7 @@ shared (deployer) actor class icrc_voice() = this {
             };
             case(null){};
           };
-          if(val.amount > 0) buffer.add(#Burn({owner = val.from.owner; amount = ?val.amount }));
+          if(val.amount > 0 and val.from.owner !=anon) buffer.add(#Burn({owner = val.from.owner; amount = ?val.amount }));
         };
       };
       switch(thisItem.mint){
@@ -117,7 +119,7 @@ shared (deployer) actor class icrc_voice() = this {
             case(null){};
           };
 
-          if(val.amount > 0) buffer.add(#Mint({owner = ?val.to.owner; amount = val.amount}));
+          if(val.amount > 0 and val.to.owner != anon) buffer.add(#Mint({owner = ?val.to.owner; amount = val.amount}));
         };
       };
       switch(thisItem.transfer){
@@ -138,8 +140,8 @@ shared (deployer) actor class icrc_voice() = this {
             case(null){};
           };
 
-          if((val.amount + Option.get(val.fee,0)) > 0) buffer.add(#Burn({owner =val.from.owner; amount = ?(val.amount + Option.get(val.fee,0))}));
-          if(val.amount > 0) buffer.add(#Mint({owner = ?val.to.owner; amount = val.amount}));
+          if((val.amount + Option.get(val.fee,0)) > 0 and val.from.owner != anon) buffer.add(#Burn({owner =val.from.owner; amount = ?(val.amount + Option.get(val.fee,0))}));
+          if(val.amount > 0 and val.to.owner != anon) buffer.add(#Mint({owner = ?val.to.owner; amount = val.amount}));
         };
       };
     };
@@ -268,6 +270,7 @@ shared (deployer) actor class icrc_voice() = this {
  
 
    public shared(msg) func start_sync() : async Bool{
+    assert(msg.caller == admin);
     Timer.cancelTimer(currentSyncTimer);
     ignore _sync_accounts();
     return true;
@@ -285,16 +288,20 @@ shared (deployer) actor class icrc_voice() = this {
         }
       );
       Set.add<Blob>(thisSet, Set.bhash, Option.get(subaccount, Blob.fromArray([])));
+     
    };
+   ignore _force_accounts();
     return true;
   };
 
   public shared(msg) func force_accounts() : async Bool{
+    assert(msg.caller == admin);
     ignore _force_accounts();
     return true;
   };
 
   public shared(msg) func add_force_accounts(request : [Principal]) : async Bool{
+    
     addLog("adding principal to force account" # debug_show(request));
     for(principal in request.vals()){
       assert(msg.caller == principal or msg.caller == admin); //only an owner or admin can add their subaccount
@@ -308,6 +315,7 @@ shared (deployer) actor class icrc_voice() = this {
 
   public shared(msg) func reset_airbrake() : async Bool{
     //get the transactions since the last block;
+    assert(msg.caller == admin);
     addLog("reset airbrake");
     airbrake := 0;
     return true;
@@ -370,6 +378,12 @@ shared (deployer) actor class icrc_voice() = this {
   public shared(msg) func set_max_seconds(amount: Nat) : async Bool{
     assert(msg.caller == admin);
     maxSecondsPerRound:= amount;
+    return true;
+  };
+
+  public shared(msg) func set_seconds_per_round(amount: Nat) : async Bool{
+    assert(msg.caller == admin);
+    updateSecondsPerRound(amount);
     return true;
   };
 

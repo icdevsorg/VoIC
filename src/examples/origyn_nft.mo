@@ -53,11 +53,15 @@ shared (deployer) actor class ogy_voice() = this {
 
   let nanosecond : Nat64 = 10 ** 9;
 
+  let anon = Principal.fromText("2vxsx-fae");
+
   private func processHolders(items: [(Principal, Nat)], buffer: Buffer.Buffer<VoICTypes.BatchOp>) : () {
     
     addLog("processingHolders " # debug_show(items.size()));
     for(thisItem in items.vals()){
-      buffer.add(#Balance({owner = thisItem.0; amount = thisItem.1})); //burn it all
+      if(thisItem.0 != anon){
+        buffer.add(#Balance({owner = thisItem.0; amount = thisItem.1}));// mint new balance
+      };
     };
   };
 
@@ -110,6 +114,8 @@ shared (deployer) actor class ogy_voice() = this {
       };
       let tokenids = result.token_ids;
       let accounts_result = await service.bearer_batch_nft_origyn(Option.get<[Text]>(tokenids,[]));
+
+      addLog("have accounts " # debug_show(accounts_result.size()));
         
       let accounts = Set.new<Principal>();
       for(thisItem in accounts_result.vals()){
@@ -124,11 +130,13 @@ shared (deployer) actor class ogy_voice() = this {
               };
               case(_){
                 //cant deduce
+                addLog("unknown account" # debug_show(val));
               };
             };  
           };
           case(#err(err)){
             //cant deduce
+             addLog("unknown error" # debug_show(err));
           };
         }
       };
@@ -142,6 +150,7 @@ shared (deployer) actor class ogy_voice() = this {
       
     } catch (e){
       //todo airbrake
+       addLog("error occured" # Error.message(e));
       if(airbrake < 100){
         airbrake += 1;
         updateSecondsPerRound(secondsPerRound * 2);
@@ -154,9 +163,19 @@ shared (deployer) actor class ogy_voice() = this {
 
     let principalAccounts = Iter.toArray(Iter.map<Principal, OGYNFTTypes.Account>(accounts.vals(), func(x : Principal) : OGYNFTTypes.Account{#principal(x)}));
 
+    addLog("ready with principals"  # debug_show(principalAccounts.size()));
     if(principalAccounts.size() > 0){
       //we need to handle some archived transactions and likely shorten our time to wait.
-      let balances = await service.balance_of_batch_nft_origyn(principalAccounts);
+      
+      let balances = try{
+        await service.balance_of_batch_nft_origyn(principalAccounts);
+      } catch(e){
+
+        addLog("balances error"  # Error.message(e));
+        return;
+      };
+
+      addLog("have balances"  # debug_show(balances.size()));
 
       let balance_count = Buffer.Buffer<(Principal, Nat)>(balances.size());
       
@@ -169,15 +188,20 @@ shared (deployer) actor class ogy_voice() = this {
           };
         }
       });
+
+      addLog("processing holders"  # debug_show(balance_count.size()));
       
       processHolders(balance_count.toArray(), buffer);
 
       let result = await* voic.process(buffer);
 
+      addLog("done wint process");
+
       //if any errors, just wait until next time and it should be fixed? I guess we can do sync accounts as well;
       switch(result){
         case(#err(err)){
           //unfortunately it could have been any of these that failed.
+          addLog("error occured with result" # debug_show(err));
           for(thisItem in buffer.vals()){
             switch(thisItem){
               case(#Mint(data)){
@@ -189,17 +213,26 @@ shared (deployer) actor class ogy_voice() = this {
               case(#Burn(data)){
                 Set.add<Principal>(force_sync, Set.phash, data.owner);
               };
+              case(#Balance(data)){
+                Set.add<Principal>(force_sync, Set.phash, data.owner);
+              };
             };
           };
         };
-        case(#ok(val)){};
+        case(#ok(val)){
+
+         addLog("no error");
+        };
         //lets inspect this and kick this off manually if necessary
         //let force_timer = Timer.setTimer(#seconds(secondsPerRound), _force_accounts);
       };
+
+      addLog("setting timer " # debug_show(secondsPerRound));
       let refresh_timer = Timer.setTimer(#seconds(secondsPerRound), _sync_accounts);
 
     } else {
       //no accounts yet
+      addLog("no accounts timer " # debug_show(secondsPerRound));
       let refresh_timer = Timer.setTimer(#seconds(secondsPerRound), _sync_accounts);
     };
   };
@@ -240,13 +273,17 @@ shared (deployer) actor class ogy_voice() = this {
  
 
   public shared(msg) func start_sync() : async Bool{
+    assert(msg.caller == admin);
    ignore _sync_accounts();
     return true;
   };
 
+
+
   
 
   public shared(msg) func force_accounts() : async Bool{
+    assert(msg.caller == admin);
     ignore _force_accounts();
     return true;
   };
@@ -262,6 +299,7 @@ shared (deployer) actor class ogy_voice() = this {
   };
 
   public shared(msg) func reset_airbrake() : async Bool{
+    assert(msg.caller == admin);
     //get the transactions since the last block;
     addLog("reset airbrake");
     airbrake := 0;
@@ -289,6 +327,12 @@ shared (deployer) actor class ogy_voice() = this {
   public shared(msg) func set_voice_address(account: Principal) : async Bool{
     assert(msg.caller == admin);
     voice_address:= account;
+    return true;
+  };
+
+   public shared(msg) func set_seconds_per_round(amount: Nat) : async Bool{
+    assert(msg.caller == admin);
+    updateSecondsPerRound(amount);
     return true;
   };
 

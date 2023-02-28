@@ -70,10 +70,14 @@ shared (deployer) actor class dip20_voice() = this {
     };
   };
 
+  let anon = Principal.fromText("2vxsx-fae");
+
   private func processHolders(items: [(Principal, Nat)], buffer: Buffer.Buffer<VoICTypes.BatchOp>) : () {
     addLog("processingHolders " # debug_show(items.size()));
     for(thisItem in items.vals()){
-      buffer.add(#Balance({owner = thisItem.0; amount = thisItem.1}));// mint new balance
+      if(thisItem.0 != anon){
+        buffer.add(#Balance({owner = thisItem.0; amount = thisItem.1}));// mint new balance
+      };
     };
   };
 
@@ -122,34 +126,37 @@ shared (deployer) actor class dip20_voice() = this {
         secondsPerRound;
       };
 
-      let result = await* voic.process(buffer);
+      addLog("have next round"  # debug_show(next_round));
+       let result : Result.Result<VoICTypes.AxonCommandExecution, VoICTypes.AxonError> = try{
+          let a_result = await* voic.process(buffer);
+          addLog("have result"  # debug_show(a_result));
+          a_result
+        
+      } catch(err){
+        addLog("err in await* "  # debug_show(Error.message(err)));
+        #err(#Error({error_message = Error.message(err); error_type = #canister_error}));
+      };
+
+      
+      
 
       //if any errors, just wait until next time and it should be fixed? I guess we can do sync accounts as well;
       switch(result){
         case(#err(err)){
+          addLog("found an error"  # debug_show(err));
           //unfortunately it could have been any of these that faileDebug.
-          for(thisItem in buffer.vals()){
-            switch(thisItem){
-              case(#Mint(data)){
-                switch(data.owner){
-                  case(?val) Set.add<Principal>(force_sync, Set.phash, val);
-                  case(null){Set.add<Principal>(force_sync, Set.phash, voice_address)};
-                };
-              };
-              case(#Burn(data)){
-                Set.add<Principal>(force_sync, Set.phash, data.owner);
-              };
-              case(#Balance(data)){
-                Set.add<Principal>(force_sync, Set.phash, data.owner);
-              };
-            };
-          };
+          
         };
-        case(#ok(val)){};
+        case(#ok(val)){
+          addLog("no error found");
         //lets inspect this and kick this off manually if necessary
         //let force_timer = Timer.setTimer(#seconds(secondsPerRound), _force_accounts);
+        }
       };
+
+      
       currentSyncTimer := Timer.setTimer(#seconds(next_round), _sync_accounts);
+      addLog("setting next timer"  # debug_show(currentSyncTimer));
 
     } else {
       //no accounts yet
@@ -192,6 +199,7 @@ shared (deployer) actor class dip20_voice() = this {
  
 
    public shared(msg) func start_sync() : async Bool{
+    assert(msg.caller == admin);
     Timer.cancelTimer(currentSyncTimer);
     ignore _sync_accounts();
     return true;
@@ -200,6 +208,7 @@ shared (deployer) actor class dip20_voice() = this {
   
 
   public shared(msg) func force_accounts() : async Bool{
+    assert(msg.caller == admin);
     ignore _force_accounts();
     return true;
   };
@@ -215,6 +224,7 @@ shared (deployer) actor class dip20_voice() = this {
   };
 
   public shared(msg) func reset_airbrake() : async Bool{
+    assert(msg.caller == admin);
     //get the transactions since the last block;
      addLog("reset airbrake");
     airbrake := 0;
@@ -224,6 +234,12 @@ shared (deployer) actor class dip20_voice() = this {
   public shared(msg) func set_admin(account: Principal) : async Bool{
     assert(msg.caller == admin);
     admin:= account;
+    return true;
+  };
+
+   public shared(msg) func set_seconds_per_round(amount: Nat) : async Bool{
+    assert(msg.caller == admin);
+    updateSecondsPerRound(amount);
     return true;
   };
 
@@ -298,6 +314,14 @@ shared (deployer) actor class dip20_voice() = this {
     delegation_fee := amount;
     return true;
   };
+
+  public shared(msg) func clear_force_sync(amount: Nat) : async Bool{
+    assert(msg.caller == admin);
+    force_sync := Set.new<Principal>();
+    return true;
+  };
+
+  
 
   public query func get_log() : async [(Int, Text)]{
     Iter.toArray(Map.entries(log));

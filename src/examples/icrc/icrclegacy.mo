@@ -81,6 +81,8 @@ shared (deployer) actor class icrc_legacy_voice() = this {
     };
   };
 
+  let anon = Principal.fromText("2vxsx-fae");
+
   private func processTransactions(items: [ICRCTypes.CandidBlock], buffer: Buffer.Buffer<VoICTypes.BatchOp>) : () {
     addLog("processingTransactions " # debug_show(items.size()));
     for(thisItem in items.vals()){
@@ -89,7 +91,7 @@ shared (deployer) actor class icrc_legacy_voice() = this {
           addLog("found a burn " # debug_show(val.amount.e8s, val));
            switch(Map.get<Blob, Principal>(seen_account_ids, Map.bhash, Blob.fromArray(val.from))){
             case(?principal){
-              if(val.amount.e8s > 0){
+              if(val.amount.e8s > 0 and principal != anon){
                 buffer.add(#Burn({owner = principal; amount = ?Nat64.toNat(val.amount.e8s)}));
               }
               
@@ -103,7 +105,7 @@ shared (deployer) actor class icrc_legacy_voice() = this {
           addLog("found a mint " # debug_show(val.amount.e8s, val));
            switch(Map.get<Blob, Principal>(seen_account_ids, Map.bhash, Blob.fromArray(val.to))){
             case(?principal){
-              if(val.amount.e8s > 0){
+              if(val.amount.e8s > 0 and principal != anon){
                 buffer.add(#Mint({owner = ?principal; amount = Nat64.toNat(val.amount.e8s)}));
               };
             };
@@ -116,7 +118,7 @@ shared (deployer) actor class icrc_legacy_voice() = this {
           addLog("found a transfer " # debug_show(val.amount.e8s, val));
            switch(Map.get<Blob, Principal>(seen_account_ids, Map.bhash, Blob.fromArray(val.to))){
             case(?principal){
-              if(val.amount.e8s > 0){
+              if(val.amount.e8s > 0 and principal != anon){
                 buffer.add(#Mint({owner = ?principal; amount = Nat64.toNat(val.amount.e8s)}));
               };
             };
@@ -127,7 +129,7 @@ shared (deployer) actor class icrc_legacy_voice() = this {
 
           switch(Map.get<Blob, Principal>(seen_account_ids, Map.bhash, Blob.fromArray(val.from))){
             case(?principal){
-              if(val.amount.e8s + val.fee.e8s > 0){
+              if(val.amount.e8s + val.fee.e8s > 0 and principal != anon){
                 buffer.add(#Burn({owner = principal; amount = ?Nat64.toNat(val.amount.e8s + val.fee.e8s)}));
               };
             };
@@ -141,7 +143,9 @@ shared (deployer) actor class icrc_legacy_voice() = this {
         case(#TransferFrom(val)){
            switch(Map.get<Blob, Principal>(seen_account_ids, Map.bhash, Blob.fromArray(val.to))){
             case(?principal){
-              buffer.add(#Mint({owner = ?principal; amount = Nat64.toNat(val.amount.e8s)}));
+               if(val.amount.e8s > 0 and principal != anon){
+                buffer.add(#Mint({owner = ?principal; amount = Nat64.toNat(val.amount.e8s)}));
+               };
             };
             case(null){
               //cant add until they tell us about themselves
@@ -150,7 +154,9 @@ shared (deployer) actor class icrc_legacy_voice() = this {
 
           switch(Map.get<Blob, Principal>(seen_account_ids, Map.bhash, Blob.fromArray(val.from))){
             case(?principal){
-              buffer.add(#Burn({owner = principal; amount = ?Nat64.toNat(val.amount.e8s)}));
+              if(val.amount.e8s + val.fee.e8s > 0 and principal != anon){
+                buffer.add(#Burn({owner = principal; amount = ?Nat64.toNat(val.amount.e8s)}));
+              };
             };
             case(null){
               //cant add until they tell us about themselves
@@ -228,6 +234,7 @@ shared (deployer) actor class icrc_legacy_voice() = this {
     };
     
     addLog("found blocks " # debug_show(transactions.blocks.size()));
+    
     if(transactions.blocks.size() > 0 ){
       numberProcessed += transactions.blocks.size();
       processTransactions(transactions.blocks, buffer);
@@ -306,6 +313,7 @@ shared (deployer) actor class icrc_legacy_voice() = this {
  
 
   public shared(msg) func start_sync() : async Bool{
+    assert(msg.caller == admin);
     Timer.cancelTimer(currentSyncTimer);
     ignore _sync_accounts();
     return true;
@@ -337,6 +345,7 @@ shared (deployer) actor class icrc_legacy_voice() = this {
   };
 
   public shared(msg) func force_accounts() : async Bool{
+   assert(msg.caller == admin);
     ignore _force_accounts();
     return true;
   };
@@ -356,6 +365,7 @@ shared (deployer) actor class icrc_legacy_voice() = this {
 
   public shared(msg) func reset_airbrake() : async Bool{
     //get the transactions since the last block;
+    assert(msg.caller == admin);
     addLog("reset airbrake");
     airbrake := 0;
     return true;
@@ -424,6 +434,18 @@ shared (deployer) actor class icrc_legacy_voice() = this {
   public shared(msg) func set_transactions_at_a_time(amount: Nat64) : async Bool{
     assert(msg.caller == admin);
     transactions_at_a_time:= amount;
+    return true;
+  };
+
+  public shared(msg) func set_next_block(amount: Nat64) : async Bool{
+    assert(msg.caller == admin);
+    next_block:= amount;
+    return true;
+  };
+
+   public shared(msg) func set_seconds_per_round(amount: Nat) : async Bool{
+    assert(msg.caller == admin);
+    updateSecondsPerRound(amount);
     return true;
   };
 
